@@ -1,0 +1,57 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // Profiles: any signed-in member can read; you can only write your own.
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.auth.uid == uid;
+      allow delete: if signedIn() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // Posts: owner can change everything. Anyone signed in may only add themselves to "responders".
+    match /posts/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.by == request.auth.uid;
+      allow update: if signedIn() && (
+        resource.data.by == request.auth.uid ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['responders'])
+      );
+      allow delete: if signedIn() && (resource.data.by == request.auth.uid || isAdmin());
+    }
+
+    // "I know this person" vouches: id must be fromUid_toUid, and only you can create/remove yours.
+    match /vouches/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.from == request.auth.uid
+        && id == request.auth.uid + '_' + request.resource.data.to;
+      allow delete: if signedIn() && resource.data.from == request.auth.uid;
+    }
+
+    // Thanks: only the owner of the post can thank the helper.
+    match /thanks/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.by == request.auth.uid
+        && get(/databases/$(database)/documents/posts/$(request.resource.data.post)).data.by == request.auth.uid;
+    }
+
+    // Reports: anyone signed in can report; only admins can read or delete them.
+    match /reports/{id} {
+      allow create: if signedIn() && request.resource.data.reporter == request.auth.uid;
+      allow read, delete: if isAdmin();
+    }
+
+    // Admin list: you can only check whether YOU are an admin. Add admins by hand in the console.
+    match /admins/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+  }
+}
